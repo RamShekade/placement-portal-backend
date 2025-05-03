@@ -1,0 +1,11 @@
+name = "placement-portal-backend"
+main = "src/index.js"
+compatibility_date = "2025-04-27"
+[[d1_databases]]
+binding = "DB"
+database_name = "placement"
+database_id = "22610ff5-58df-4c61-a5dc-79f6e1e516ac"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "raksha"
