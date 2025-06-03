@@ -2,10 +2,25 @@ import { Hono } from 'hono'
 import bcrypt from 'bcryptjs'
 import { sign, verify } from 'hono/jwt'
 import { cors } from 'hono/cors'
+import students from './students.json'
+import { sendCreds } from "./sendEmail"  // ✅ Correct import for named export
+import auth from './student/auth'
 
 const app = new Hono()
 
+app.use('*', async (c, next) => {
+  c.env.JWT_SECRET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  c.env.signJWT = async (payload) => await sign(payload, c.env.JWT_SECRET)
+  c.env.verifyJWT = async (token) => await verify(token, c.env.JWT_SECRET)
+  await next()
+})
+
 app.use('*', cors())
+
+// routes 
+// auth route
+
+app.route("/api/student",(auth));
 
 // Test API
 app.get('/api/hello', (c) => {
@@ -72,6 +87,7 @@ app.post('/api/login', async (c) => {
     return c.json({ error: 'Login failed', details: err.message }, 500)
   }
 })
+
 
 // Upload API
 app.post('/api/upload', async (c) => {
@@ -182,5 +198,171 @@ app.get('/media/:type/:filename', async (c) => {
     }
   })
 })
+
+
+// create user table
+
+app.get('/api/create-table', async (c) => {
+  try {
+    await c.env.DB.prepare(`
+      CREATE TABLE IF NOT EXISTS students_login (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  gr_number        TEXT UNIQUE NOT NULL,           -- Username
+  email            TEXT NOT NULL,
+  password_hash    TEXT NOT NULL,
+  password_updated    BOOLEAN DEFAULT 0,              -- 0 = not changed, 1 = changed
+  created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+    `).run();
+
+    return c.text('✅ Table "students_login" created successfully');
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: '❌ Failed to create table', details: err.message }, 500);
+  }
+});
+
+
+// upload students dummy data
+
+// app.post('/api/dummydata', async (c) => {
+//   const students = await c.req.json(); // Get uploaded JSON body
+//   const db = c.env.DB;
+//   let inserted = 0;
+//   let skipped = [];
+
+//   function generatePassword(length = 16) {
+//     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+//     return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+//   }
+
+//   for (const row of students) {
+//     const gr_number = row['GR']?.toString().trim();
+//     const email = row['Email']?.toString().trim();
+//     const plainPassword = generatePassword();
+
+//     if (!gr_number || !email) continue;
+
+//     try {
+//       const saltRounds = 10;
+//       // const passwordHash = await bcrypt.hash(plainPassword, saltRounds);
+
+//       await db.prepare(`
+//         INSERT INTO students_login (gr_number, email, password_hash, password_updated)
+//         VALUES (?, ?, ?, 0)
+//       `).bind(gr_number, email, plainPassword).run();
+
+//       inserted++;
+//       // Optionally store `plainPassword` in memory for emailing later
+//     } catch (err) {
+//       console.warn(`Skipping ${email}: ${err.message}`);
+//       skipped.push({ email, error: err.message });
+//     }
+//   }
+
+//   return c.json({
+//     message: `✅ Inserted ${inserted} students.`,
+//     skipped
+//   });
+// });
+
+app.post('/api/dummydata', async (c) => {
+  const students = await c.req.json(); // JSON from frontend
+  const db = c.env.DB;
+  let inserted = 0;
+  let skipped = [];
+
+  function generatePassword(length = 16) {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  }
+
+  for (const row of students) {
+    const gr_number = row['GR']?.toString().trim();
+    const email = row['Email']?.toString().trim();
+    const plainPassword = generatePassword();
+
+    if (!gr_number || !email) continue;
+
+    try {
+      const passwordHash = await bcrypt.hash(plainPassword, 12); // bcrypt with salt
+
+      // ✅ Insert into DB
+      await db.prepare(`
+        INSERT INTO students_login (gr_number, email, password_hash, password_updated)
+        VALUES (?, ?, ?, 0)`
+      ).bind(gr_number, email, passwordHash).run();
+
+      // ✅ Send credentials via email (your implementation of sendCreds)
+      await sendCreds(email, gr_number, plainPassword);
+
+      inserted++;
+    } catch (err) {
+      console.warn(`❌ Skipping ${email}: ${err.message}`);
+      skipped.push({ email, error: err.message });
+    }
+  }
+
+  return c.json({
+    message: `✅ Inserted ${inserted} students.`,
+    skipped
+  });
+});
+
+
+// send email for dummy registration
+
+// app.post('/api/send-creds-batch', async (c) => {
+//   const db = c.env.DB;
+
+//   const batchSize = 25;
+//   const maxSubrequests = 50;
+
+//   let totalSent = 0;
+//   let totalFailed = [];
+//   let offset = 0;
+
+//   while (true) {
+//     // Fetch batch of students
+//     const { results } = await db.prepare(
+//       'SELECT gr_number, email, password_hash FROM students_login LIMIT ? OFFSET ?'
+//     ).bind(batchSize, offset).all();
+
+//     if (results.length === 0) break;
+
+//     let batchSent = 0;
+//     for (const student of results) {
+//       try {
+//         await sendCreds(student.email, student.gr_number, student.password_hash);
+//         batchSent++;
+//         totalSent++;
+//       } catch (err) {
+//         console.error(`❌ Error for ${student.email}: ${err.message}`);
+//         totalFailed.push({ email: student.email, error: err.message });
+//       }
+
+//       // Avoid hitting 50 subrequest limit
+//       if ((batchSent + totalFailed.length) >= maxSubrequests - 2) {
+//         console.log("⏸️ Subrequest limit reached, pausing...");
+//         return c.json({
+//           message: `⏸️ Partial batch sent. Resume by calling this API again.`,
+//           offset: offset + batchSize,
+//           sentSoFar: totalSent,
+//           failed: totalFailed
+//         });
+//       }
+//     }
+
+//     offset += batchSize;
+//   }
+
+//   return c.json({
+//     message: "✅ All emails sent successfully.",
+//     totalSent,
+//     totalFailed
+//   });
+
+// });
+
 
 export default app
