@@ -13,7 +13,7 @@
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^3.0.2",
-    "hono": "^4.7.8",
+    "hono": "^4.7.11",
     "jsonwebtoken": "^9.0.2",
     "wrangler": "^4.13.2",
     "xlsx": "^0.18.5"

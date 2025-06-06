@@ -5,8 +5,18 @@ import { cors } from 'hono/cors'
 import students from './students.json'
 import { sendCreds } from "./sendEmail"  // ✅ Correct import for named export
 import auth from './student/auth'
+import { authMiddleware } from './middleware/Authenticate'
+import student from './student/student'
 
 const app = new Hono()
+
+app.use(
+  '*',
+  cors({
+    origin: '*', // 👈 your frontend domain
+    credentials: true,
+  })
+);
 
 app.use('*', async (c, next) => {
   c.env.JWT_SECRET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
@@ -15,12 +25,11 @@ app.use('*', async (c, next) => {
   await next()
 })
 
-app.use('*', cors())
 
 // routes 
 // auth route
-
-app.route("/api/student",(auth));
+app.route("/api/student", student )
+app.route("/api/auth",(auth));
 
 // Test API
 app.get('/api/hello', (c) => {
@@ -204,67 +213,110 @@ app.get('/media/:type/:filename', async (c) => {
 
 app.get('/api/create-table', async (c) => {
   try {
-    await c.env.DB.prepare(`
-      CREATE TABLE IF NOT EXISTS students_login (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  gr_number        TEXT UNIQUE NOT NULL,           -- Username
-  email            TEXT NOT NULL,
-  password_hash    TEXT NOT NULL,
-  password_updated    BOOLEAN DEFAULT 0,              -- 0 = not changed, 1 = changed
-  created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-    `).run();
+    const db = c.env.DB
 
-    return c.text('✅ Table "students_login" created successfully');
+    // Create students_login table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS students_login (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gr_number TEXT UNIQUE NOT NULL,
+        email TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        password_updated BOOLEAN DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `).run()
+
+    // Create student_profiles table
+    await db.prepare(`
+      CREATE TABLE IF NOT EXISTS student_profiles (
+      id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+     
+      profile_url                 TEXT NOT NULL,                      -- R2 link
+
+      -- Name details
+      first_name                  TEXT NOT NULL,
+      middle_name                 TEXT,                      -- Optional
+      last_name                   TEXT NOT NULL,
+
+      gender                      TEXT CHECK(gender IN ('Male', 'Female', 'Other')) NOT NULL,
+      date_of_birth               DATE NOT NULL,
+
+      -- Contact & ID
+      contact_number_primary      TEXT NOT NULL,
+      contact_number_alternate    TEXT,                      -- Optional
+      email                       TEXT NOT NULL,
+      aadhaar_number              TEXT CHECK(length(aadhaar_number) = 12), -- 12-digit only
+      pan_number                  TEXT,                      -- Optional
+
+      student_id                  TEXT CHECK(length(student_id) = 11) UNIQUE NOT NULL,
+
+      -- Academic Info
+      current_year                INTEGER NOT NULL,
+      department                  TEXT NOT NULL,
+      year_of_admission           INTEGER NOT NULL,
+      expected_graduation_year    INTEGER NOT NULL,
+
+      -- SSC
+      ssc_percentage              TEXT NOT NULL,
+      ssc_year                    INTEGER NOT NULL,
+      ssc_marksheet_url           TEXT,                      -- From R2
+
+      -- HSC or Diploma (Optional)
+      hsc_percentage              TEXT,
+      hsc_year                    INTEGER,
+      hsc_marksheet_url           TEXT,
+      diploma_percentage          TEXT,
+      diploma_year                INTEGER,
+      diploma_marksheet_url       TEXT,
+
+      -- CGPA
+      sem1_cgpa REAL CHECK(sem1_cgpa BETWEEN 4 AND 10),
+      sem2_cgpa REAL CHECK(sem2_cgpa BETWEEN 4 AND 10),
+      sem3_cgpa REAL CHECK(sem3_cgpa BETWEEN 4 AND 10),
+      sem4_cgpa REAL CHECK(sem4_cgpa BETWEEN 4 AND 10),
+      sem5_cgpa REAL CHECK(sem5_cgpa BETWEEN 4 AND 10),
+      sem6_cgpa REAL CHECK(sem6_cgpa BETWEEN 4 AND 10),
+      sem7_cgpa REAL CHECK(sem7_cgpa BETWEEN 4 AND 10),
+      sem8_cgpa REAL CHECK(sem8_cgpa BETWEEN 4 AND 10),
+
+      -- Skills & Languages
+      programming_languages       TEXT,                      -- JSON array
+      soft_skills                 TEXT,                      -- JSON array
+
+      -- Certificates (Max 3)
+      certifications              TEXT,                      -- JSON [{title, url}]
+
+      -- Projects (Max 3)
+      projects                    TEXT,                      -- JSON [{title, description, link}]
+
+      -- Resume
+      resume_url                  TEXT NOT NULL,                      -- R2 link
+      
+      -- Achievements (max 3)
+      achievements             TEXT, -- JSON: [{title, description, url}]
+
+      -- Internships (can be more than 3)
+      internships              TEXT, -- JSON: [{title, type, company, duration, location, location_type, description}]
+
+
+      -- Meta
+      status                      TEXT CHECK(status IN ('pending','active','debarred')) DEFAULT 'pending',
+      updated_at                  DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    `).run()
+
+    return c.text('✅ Tables "students_login" and "student_profiles" created successfully')
   } catch (err) {
-    console.error(err);
-    return c.json({ error: '❌ Failed to create table', details: err.message }, 500);
+    console.error(err)
+    return c.json({ error: '❌ Failed to create tables', details: err.message }, 500)
   }
-});
+})
 
 
 // upload students dummy data
 
-// app.post('/api/dummydata', async (c) => {
-//   const students = await c.req.json(); // Get uploaded JSON body
-//   const db = c.env.DB;
-//   let inserted = 0;
-//   let skipped = [];
-
-//   function generatePassword(length = 16) {
-//     const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-//     return Array.from({ length }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-//   }
-
-//   for (const row of students) {
-//     const gr_number = row['GR']?.toString().trim();
-//     const email = row['Email']?.toString().trim();
-//     const plainPassword = generatePassword();
-
-//     if (!gr_number || !email) continue;
-
-//     try {
-//       const saltRounds = 10;
-//       // const passwordHash = await bcrypt.hash(plainPassword, saltRounds);
-
-//       await db.prepare(`
-//         INSERT INTO students_login (gr_number, email, password_hash, password_updated)
-//         VALUES (?, ?, ?, 0)
-//       `).bind(gr_number, email, plainPassword).run();
-
-//       inserted++;
-//       // Optionally store `plainPassword` in memory for emailing later
-//     } catch (err) {
-//       console.warn(`Skipping ${email}: ${err.message}`);
-//       skipped.push({ email, error: err.message });
-//     }
-//   }
-
-//   return c.json({
-//     message: `✅ Inserted ${inserted} students.`,
-//     skipped
-//   });
-// });
 
 app.post('/api/dummydata', async (c) => {
   const students = await c.req.json(); // JSON from frontend
