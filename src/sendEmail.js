@@ -1,5 +1,5 @@
 export const sendCreds = async (email, gr, password) => {
-  const apiKey = "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" // Use environment variable in real-world!
+  const apiKey = env.API_KEY // Use environment variable in real-world!
   const response = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
